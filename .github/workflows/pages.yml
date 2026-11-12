@@ -1,0 +1,57 @@
+name: pages
+# Runs on main's context only (github-pages environment allows the default branch).
+# The desk pushes the encrypted bundle to the orphan `data` branch, then sends a repository_dispatch "data".
+on:
+  push:
+    branches: [main]
+  repository_dispatch:
+    types: [data]
+  workflow_dispatch:
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: pages
+  cancel-in-progress: true
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with: { ref: main, path: src }
+      - uses: actions/checkout@v4
+        with: { ref: data, path: data }
+        continue-on-error: true
+      - name: assemble
+        env:
+          DATA_KEY: ${{ secrets.DATA_KEY }}
+          DATA_PATH: ${{ secrets.DATA_PATH }}
+        run: |
+          set +x
+          mkdir -p _site
+          cp -r src/web/. _site/
+          if [ -f data/bundle.enc ] && [ -n "$DATA_KEY" ] && [ -n "$DATA_PATH" ]; then
+            pip install -q cryptography >/dev/null 2>&1
+            python3 src/scripts/decrypt.py data/bundle.enc _site >/dev/null
+            echo "data decrypted"
+          else
+            echo "no data bundle or secrets missing: shell only"
+          fi
+          touch _site/.nojekyll
+          tar --dereference --hard-dereference -C _site -cf "$RUNNER_TEMP/artifact.tar" .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: github-pages
+          path: ${{ runner.temp }}/artifact.tar
+          retention-days: 1
+          if-no-files-found: error
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.d.outputs.page_url }}
+    steps:
+      - id: d
+        uses: actions/deploy-pages@v4
